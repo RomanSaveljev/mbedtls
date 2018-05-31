@@ -2574,21 +2574,22 @@ data_exchange:
     fflush( stdout );
 
     if(opt.get_file != 0) {
-        buf[0] = '\r';
-        buf[1] = '\n';
-        buf[2] = '\r';
-        buf[3] = '\n';
+        buf[0] = 'a';
+        buf[1] = '\r';
+        buf[2] = '\n';
+        buf[3] = '\r';
+        buf[4] = '\n';
 
-        bytes_read = sizeof(buf) - 4;
+        bytes_read = sizeof(buf) - 5;
 
-        if(load_file(opt.get_file, &buf[4], &bytes_read) != 0)
+        if(load_file(opt.get_file, &buf[5], &bytes_read) != 0)
         {
             mbedtls_printf( "Failed to open file\n\n" );
             goto reset;
         }
 
         mbedtls_printf("read %lu bytes\n\n", bytes_read);
-        len = bytes_read + 4;
+        len = bytes_read + 5;
     } else {
         len = sprintf( (char *) buf, HTTP_RESPONSE,
                        mbedtls_ssl_get_ciphersuite( &ssl ) );
