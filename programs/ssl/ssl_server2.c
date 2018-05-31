@@ -145,6 +145,7 @@ int main( void )
 #define DFL_BADMAC_LIMIT        -1
 #define DFL_EXTENDED_MS         -1
 #define DFL_ETM                 -1
+#define DFL_GET_FILE            0
 
 #define LONG_RESPONSE "<p>01-blah-blah-blah-blah-blah-blah-blah-blah-blah\r\n" \
     "02-blah-blah-blah-blah-blah-blah-blah-blah-blah-blah-blah-blah-blah\r\n"  \
@@ -167,7 +168,7 @@ int main( void )
  * You will need to adapt the mbedtls_ssl_get_bytes_avail() test in ssl-opt.sh
  * if you change this value to something outside the range <= 100 or > 500
  */
-#define IO_BUF_LEN      200
+#define IO_BUF_LEN      1024*1024
 
 #if defined(MBEDTLS_X509_CRT_PARSE_C)
 #if defined(MBEDTLS_FS_IO)
@@ -185,7 +186,9 @@ int main( void )
     "                        note: if neither crt_file/key_file nor crt_file2/key_file2 are used,\n" \
     "                              preloaded certificate(s) and key(s) are used if available\n" \
     "    dhm_file=%%s        File containing Diffie-Hellman parameters\n" \
-    "                       default: preloaded parameters\n"
+    "                       default: preloaded parameters\n" \
+    "    get_file=%%s        File to send for HTTP GET\n" \
+    "                       default: NULL\n"
 #else
 #define USAGE_IO \
     "\n"                                                    \
@@ -446,6 +449,7 @@ struct options
     uint32_t hs_to_min;         /* Initial value of DTLS handshake timer    */
     uint32_t hs_to_max;         /* Max value of DTLS handshake timer        */
     int badmac_limit;           /* Limit of records with bad MAC            */
+    const char *get_file;       /* the file to send back to HTTP GET        */
 } opt;
 
 static void my_debug( void *ctx, int level,
@@ -462,6 +466,49 @@ static void my_debug( void *ctx, int level,
     mbedtls_fprintf( (FILE *) ctx, "%s:%04d: |%d| %s", basename, line, level, str );
     fflush(  (FILE *) ctx  );
 }
+
+#if defined(MBEDTLS_FS_IO)
+/*
+ * Load all data from a file into a given buffer.
+ *
+ */
+static int load_file( const char *path, unsigned char *buf, size_t *n )
+{
+    FILE *f;
+    long size;
+
+    if( ( f = fopen( path, "rb" ) ) == NULL )
+        return( MBEDTLS_ERR_PK_FILE_IO_ERROR );
+
+    fseek( f, 0, SEEK_END );
+    if( ( size = ftell( f ) ) == -1 )
+    {
+        fclose( f );
+        return( MBEDTLS_ERR_PK_FILE_IO_ERROR );
+    }
+    fseek( f, 0, SEEK_SET );
+
+    if((size_t)size > *n) {
+        fclose( f );
+        return( MBEDTLS_ERR_PK_FILE_IO_ERROR );
+    }
+
+    *n = (size_t) size;
+
+    if( fread( buf, 1, *n, f ) != *n )
+    {
+        fclose( f );
+
+        return( MBEDTLS_ERR_PK_FILE_IO_ERROR );
+    }
+
+    fclose( f );
+
+    buf[*n] = '\0';
+
+    return( 0 );
+}
+#endif
 
 /*
  * Test recv/send functions that make sure each try returns
@@ -894,6 +941,7 @@ int idle( mbedtls_net_context *fd,
 int main( int argc, char *argv[] )
 {
     int ret = 0, len, written, frags, exchanges_left;
+    size_t bytes_read = 0;
     int version_suites[4][2];
     unsigned char buf[IO_BUF_LEN];
 #if defined(MBEDTLS_KEY_EXCHANGE__SOME__PSK_ENABLED)
@@ -1068,6 +1116,7 @@ int main( int argc, char *argv[] )
     opt.badmac_limit        = DFL_BADMAC_LIMIT;
     opt.extended_ms         = DFL_EXTENDED_MS;
     opt.etm                 = DFL_ETM;
+    opt.get_file            = DFL_GET_FILE;
 
     for( i = 1; i < argc; i++ )
     {
@@ -1395,6 +1444,9 @@ int main( int argc, char *argv[] )
         else if( strcmp( p, "sni" ) == 0 )
         {
             opt.sni = q;
+        }
+        else if( strcmp( p, "get_file" ) == 0 ) {
+            opt.get_file = q;
         }
         else
             goto usage;
@@ -2521,8 +2573,26 @@ data_exchange:
     mbedtls_printf( "  > Write to client:" );
     fflush( stdout );
 
-    len = sprintf( (char *) buf, HTTP_RESPONSE,
-                   mbedtls_ssl_get_ciphersuite( &ssl ) );
+    if(opt.get_file != 0) {
+        buf[0] = '\r';
+        buf[1] = '\n';
+        buf[2] = '\r';
+        buf[3] = '\n';
+
+        bytes_read = sizeof(buf) - 4;
+
+        if(load_file(opt.get_file, &buf[4], &bytes_read) != 0)
+        {
+            mbedtls_printf( "Failed to open file\n\n" );
+            goto reset;
+        }
+
+        mbedtls_printf("read %lu bytes\n\n", bytes_read);
+        len = bytes_read + 4;
+    } else {
+        len = sprintf( (char *) buf, HTTP_RESPONSE,
+                       mbedtls_ssl_get_ciphersuite( &ssl ) );
+    }
 
     if( opt.transport == MBEDTLS_SSL_TRANSPORT_STREAM )
     {
